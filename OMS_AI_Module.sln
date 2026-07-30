@@ -1,0 +1,24 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "OMS_AI_Module", "vs\OMS_AI_Module.vcxproj", "{DCA8F913-FF39-41BF-A1E5-50E052B16B83}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{DCA8F913-FF39-41BF-A1E5-50E052B16B83}.Debug|x64.ActiveCfg = Debug|x64
+		{DCA8F913-FF39-41BF-A1E5-50E052B16B83}.Debug|x64.Build.0 = Debug|x64
+		{DCA8F913-FF39-41BF-A1E5-50E052B16B83}.Release|x64.ActiveCfg = Release|x64
+		{DCA8F913-FF39-41BF-A1E5-50E052B16B83}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {5DF85428-164B-44B6-814C-6B788453C1FE}
+	EndGlobalSection
+EndGlobal
