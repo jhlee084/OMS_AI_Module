@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dijkstra.h"
+#include <array>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -42,6 +43,9 @@ struct VehicleDataPoint {
   int last_point = 0;
   int next_point = 0;
   int64_t timestamp = 0;
+  bool is_active = false;
+  bool is_moving = false;
+  bool is_learning_sample = false;
 };
 
 
@@ -50,6 +54,13 @@ struct VehicleEdgeProgress {
   int edge_id = 0;
   int next_seg_index = 0;
   double elapsed = 0.0;
+  int vehicle_count_bucket = 0;
+};
+
+struct VehicleOccupancy {
+  int edge_id = 0;
+  int vehicle_count_bucket_at_entry = 0;
+  int64_t last_seen_timestamp = 0;
 };
 #endif
 
@@ -86,7 +97,10 @@ struct GraphState {
   std::unordered_set<int> disabled_seg;
   RoutingScratch routing_scratch;
 #if USE_LEARN
-  std::unordered_map<int, LearnedAgg> learned_edge_time_by_id;
+  std::unordered_map<int, std::array<LearnedAgg, LEARN_VEHICLE_BUCKET_MAX + 1>>
+    learned_edge_time_by_vehicle_count;
+  std::unordered_map<int, int> moving_vehicle_count_by_edge;
+  int64_t latest_vehicle_timestamp = 0;
   std::unordered_map<uint64_t, int> pair_to_seg_ids;
 #endif
 };
@@ -97,12 +111,14 @@ extern std::mutex g_mtx;
 #if USE_LEARN
 extern std::unordered_map<std::string, VehicleDataPoint> g_last_message_by_vehicle;
 extern std::unordered_map<std::string, VehicleEdgeProgress> g_edge_progress_by_vehicle;
+extern std::unordered_map<std::string, VehicleOccupancy> g_vehicle_occupancy;
 extern std::mutex g_learn_queue_mtx;
 extern std::condition_variable g_learn_cv;
 extern std::deque<std::string> g_learn_queue;
 extern std::thread g_learn_worker;
 extern bool g_learn_worker_running;
 extern bool g_learn_stop_requested;
+extern bool g_learn_worker_busy;
 #endif
 
 void append_points_no_dup(std::vector<int>& dst, const std::vector<int>& src);
@@ -116,6 +132,10 @@ void refresh_all_edge_weight_cache_locked(GraphState& state);
 #if USE_LEARN
 void merge_learned_agg(LearnedAgg& dst, const LearnedAgg& add);
 uint64_t seg_pair_key(int sp, int ep);
-double blend_learned_time(double base_w, const LearnedAgg* agg);
+int vehicle_count_bucket(int moving_vehicle_count);
+int moving_vehicle_count_locked(const GraphState& state, int edge_id);
+double blend_learned_time(
+  double base_w, const LearnedAgg* agg);
+void flush_edge_learning_worker();
 void stop_edge_learning_worker();
 #endif

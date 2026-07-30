@@ -9,12 +9,14 @@ std::mutex g_mtx;
 #if USE_LEARN
 std::unordered_map<std::string, VehicleDataPoint> g_last_message_by_vehicle;
 std::unordered_map<std::string, VehicleEdgeProgress> g_edge_progress_by_vehicle;
+std::unordered_map<std::string, VehicleOccupancy> g_vehicle_occupancy;
 std::mutex g_learn_queue_mtx;
 std::condition_variable g_learn_cv;
 std::deque<std::string> g_learn_queue;
 std::thread g_learn_worker;
 bool g_learn_worker_running = false;
 bool g_learn_stop_requested = false;
+bool g_learn_worker_busy = false;
 #endif
 
 void append_points_no_dup(std::vector<int>& dst, const std::vector<int>& src) {
@@ -35,9 +37,18 @@ void refresh_edge_weight_cache_locked(GraphState& state, int edge_id) {
   EdgeChain& edge = itEdge->second;
   double edge_w = edge.base_w;
 #if USE_LEARN
-  auto itLearn = state.learned_edge_time_by_id.find(edge.edge_id);
-  if (itLearn != state.learned_edge_time_by_id.end()) {
-    edge_w = blend_learned_time(edge.base_w, &itLearn->second);
+  const int count = moving_vehicle_count_locked(state, edge.edge_id);
+  const int bucket = vehicle_count_bucket(count);
+  auto itLearn = state.learned_edge_time_by_vehicle_count.find(edge.edge_id);
+  if (itLearn != state.learned_edge_time_by_vehicle_count.end()) {
+    // Missing buckets reuse useful lower-occupancy knowledge, and a busier
+    // bucket is never allowed to predict less than a learned lower bucket.
+    for (int candidate = 0; candidate <= bucket; ++candidate) {
+      const LearnedAgg& agg = itLearn->second[candidate];
+      if (agg.count <= 0.0) continue;
+      const double candidate_w = blend_learned_time(edge.base_w, &agg);
+      if (candidate_w > edge_w) edge_w = candidate_w;
+    }
   }
 #endif
 
@@ -134,6 +145,17 @@ void merge_learned_agg(LearnedAgg& dst, const LearnedAgg& add) {
 
 uint64_t seg_pair_key(int sp, int ep) {
   return (uint64_t)(uint32_t)sp << 32 | (uint64_t)(uint32_t)ep;
+}
+
+int vehicle_count_bucket(int moving_vehicle_count) {
+  if (moving_vehicle_count <= 0) return 0;
+  if (moving_vehicle_count >= LEARN_VEHICLE_BUCKET_MAX) return LEARN_VEHICLE_BUCKET_MAX;
+  return moving_vehicle_count;
+}
+
+int moving_vehicle_count_locked(const GraphState& state, int edge_id) {
+  auto it = state.moving_vehicle_count_by_edge.find(edge_id);
+  return (it == state.moving_vehicle_count_by_edge.end()) ? 0 : it->second;
 }
 
 double blend_learned_time(double base_w, const LearnedAgg* agg) {

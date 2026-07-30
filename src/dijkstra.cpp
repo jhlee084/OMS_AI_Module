@@ -226,8 +226,10 @@ bool dijkstra_has_topology() {
 void dijkstra_clear() {
 #if USE_LEARN
   stop_edge_learning_worker();
+  dijkstra_stop_learned_autosave_worker();
   g_last_message_by_vehicle.clear();
   g_edge_progress_by_vehicle.clear();
+  g_vehicle_occupancy.clear();
 #endif
   std::lock_guard<std::mutex> lk(g_mtx);
   g_state = GraphState{};

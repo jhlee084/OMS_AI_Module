@@ -8,6 +8,7 @@
 bool build_graph_from_track_json(const std::string& json_text, DijkstraStats* stats) {
 #if USE_LEARN
   stop_edge_learning_worker();
+  dijkstra_stop_learned_autosave_worker();
 #endif
 
   picojson::value root;
@@ -264,9 +265,12 @@ bool build_graph_from_track_json(const std::string& json_text, DijkstraStats* st
     g_state.disabled_seg = std::move(disabled);
 #if USE_LEARN
     g_state.pair_to_seg_ids = std::move(pair_to_seg_ids);
-    g_state.learned_edge_time_by_id.clear();
+    g_state.learned_edge_time_by_vehicle_count.clear();
+    g_state.moving_vehicle_count_by_edge.clear();
+    g_state.latest_vehicle_timestamp = 0;
     g_last_message_by_vehicle.clear();
     g_edge_progress_by_vehicle.clear();
+    g_vehicle_occupancy.clear();
 #endif
     g_state.edge_out_by_vertex.assign(g_state.point_id_by_index.size(), std::vector<EdgeChain*>());
     for (auto& kv : g_state.edge_by_id) {

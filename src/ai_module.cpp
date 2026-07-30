@@ -1,6 +1,7 @@
 #include "ai_module.h"
 #include "dijkstra.h"
 #include <algorithm>
+#include <climits>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -50,16 +51,44 @@ AI_API int __cdecl AI_UninitModule() {
 }
 
 AI_API int __cdecl AI_PrepareData(int src_opt, int data_type, unsigned char* data, int size) {
-  (void)src_opt;
-  if (data_type != ai::DTYPE::TOPOLOGY) {
-      LogFile("[AIModule] data_type is not AI. Ignore. data_type: %d", data_type);
-    // requirement: ignore others
+  LogFile("[AIModule] data_type=%d. size=%d", data_type, size);
+  if (data_type == ai::DTYPE::CONFIG) {
+      LogFile("[AIModule] CONFIG is not used. Ignore. data_type=%d", data_type);
     return 0;
   }
   if (!data || size <= 0) {
-      LogFile("[Error] [AIModule] data: %s,  size: %d", data, size);
+      LogFile("[Error] [AIModule] invalid prepare data. data=%p size=%d", data, size);
       return 0;
   }
+  if (data_type == ai::DTYPE::QLEARNED) {
+    if (src_opt != ai::SRC_OPT::SOURCE_MEMORY) {
+      LogFile(
+        "[Error] [AIModule] QLEARNED supports SOURCE_MEMORY only. src_opt=%d",
+        src_opt);
+      return 0;
+    }
+
+    std::string json_text(
+      reinterpret_cast<char*>(data),
+      reinterpret_cast<char*>(data) + size);
+    int restored_buckets = 0;
+    const bool ok =
+      dijkstra_restore_learned_data(json_text, &restored_buckets);
+    if (!ok) {
+      LogFile("[Error] [AIModule] Failed to restore learned data.");
+      return 0;
+    }
+    LogFile(
+      "[AIModule] Restored learned data. buckets=%d bytes=%d",
+      restored_buckets, size);
+    return restored_buckets > 0 ? restored_buckets : 1;
+  }
+
+  if (data_type != ai::DTYPE::TOPOLOGY) {
+    LogFile("[AIModule] Unsupported data_type=%d", data_type);
+    return 0;
+  }
+
   std::string json_text(reinterpret_cast<char*>(data), reinterpret_cast<char*>(data) + size);
 
   DijkstraStats st;
@@ -67,6 +96,7 @@ AI_API int __cdecl AI_PrepareData(int src_opt, int data_type, unsigned char* dat
   if (ok) {
       logf("[AIModule] Loaded topology. segments=%d, vertices=%zu", st.segments_loaded, st.vertices);
       LogFile("[AIModule] Loaded topology. segments=%d, vertices=%zu", st.segments_loaded, st.vertices);
+      dijkstra_load_learned_data_file();
   }
   else {
       logf("[AIModule] Failed to load topology.");
@@ -101,8 +131,47 @@ AI_API int __cdecl AI_InitRouter() {
 AI_API int __cdecl AI_Start() { return 1; }
 AI_API int __cdecl AI_Stop() { return 1; }
 AI_API int __cdecl AI_ShutDown() { return 1; }
-AI_API int __cdecl AI_GetLearnedQueueValuesSize() { return 1; }
-AI_API int __cdecl AI_SaveLearnedQueueValues(int src_opt, unsigned char* data, int* size) { (void)src_opt; (void)data; (void)size; return 1; }
+AI_API int __cdecl AI_GetLearnedQueueValuesSize() {
+  std::string learned_json;
+  if (!dijkstra_serialize_learned_data(learned_json) ||
+      learned_json.size() > (size_t)INT_MAX) {
+    LogFile("[Error] [AIModule] Failed to get learned data size.");
+    return 0;
+  }
+  return (int)learned_json.size();
+}
+
+AI_API int __cdecl AI_SaveLearnedQueueValues(
+  int src_opt, unsigned char* data, int* size) {
+  if (src_opt != ai::SRC_OPT::SOURCE_MEMORY || !size) {
+    LogFile(
+      "[Error] [AIModule] Invalid learned save request. src_opt=%d size_ptr=%p",
+      src_opt, size);
+    return 0;
+  }
+
+  std::string learned_json;
+  if (!dijkstra_serialize_learned_data(learned_json) ||
+      learned_json.size() > (size_t)INT_MAX) {
+    LogFile("[Error] [AIModule] Failed to serialize learned data.");
+    return 0;
+  }
+
+  const int required = (int)learned_json.size();
+  const int capacity = *size;
+  if (!data || capacity < required) {
+    *size = required;
+    LogFile(
+      "[AIModule] Learned save buffer is too small. capacity=%d required=%d",
+      capacity, required);
+    return 0;
+  }
+
+  std::memcpy(data, learned_json.data(), learned_json.size());
+  *size = required;
+  LogFile("[AIModule] Saved learned data. bytes=%d", required);
+  return 1;
+}
 AI_API int __cdecl AI_Update() { return 1; }
 
 AI_API int __cdecl AI_GetExpectedPath(int cur_point, int dst_point, bool using_init, bool is_mtl,
