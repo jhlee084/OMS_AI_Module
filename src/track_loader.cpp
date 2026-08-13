@@ -78,6 +78,7 @@ bool build_graph_from_track_json(const std::string& json_text, DijkstraStats* st
     Seg seg;
     seg.from = sp;
     seg.to = ep;
+    seg.offset_length = length > 0.0 ? length * 1000.0 : 0.0;
     seg.base_w = travel_time;
     seg.seg_id = seg_id;
 
@@ -273,13 +274,18 @@ bool build_graph_from_track_json(const std::string& json_text, DijkstraStats* st
     g_vehicle_occupancy.clear();
 #endif
     g_state.edge_out_by_vertex.assign(g_state.point_id_by_index.size(), std::vector<EdgeChain*>());
+    g_state.edge_in_by_vertex.assign(g_state.point_id_by_index.size(), std::vector<EdgeChain*>());
     for (auto& kv : g_state.edge_by_id) {
       EdgeChain& edge = kv.second;
 
-      if (edge.start_vertex < 0 || edge.start_vertex >= (int)g_state.edge_out_by_vertex.size()) continue;
-      g_state.edge_out_by_vertex[edge.start_vertex].push_back(&edge);
+      if (edge.start_vertex >= 0 && edge.start_vertex < (int)g_state.edge_out_by_vertex.size()) {
+        g_state.edge_out_by_vertex[edge.start_vertex].push_back(&edge);
+      }
+      if (edge.end_vertex >= 0 && edge.end_vertex < (int)g_state.edge_in_by_vertex.size()) {
+        g_state.edge_in_by_vertex[edge.end_vertex].push_back(&edge);
+      }
     }
-refresh_all_edge_weight_cache_locked(g_state);
+    refresh_all_edge_weight_cache_locked(g_state);
     g_state.has_topology = true;
   }
 

@@ -15,6 +15,9 @@
 struct Seg {
   int from = 0;
   int to = 0;
+  // Segment length in the same unit used by OMS point_distance/location.offset.
+  // Track JSON stores length in metres while OMS offsets are millimetres.
+  double offset_length = 0.0;
   double base_w = 0.0;
   double current_w = 0.0;
   int seg_id = 0;
@@ -90,6 +93,7 @@ struct GraphState {
   std::vector<int> point_id_by_index;
   std::vector<std::vector<int>> edge_out_ids_by_vertex;
   std::vector<std::vector<EdgeChain*>> edge_out_by_vertex;
+  std::vector<std::vector<EdgeChain*>> edge_in_by_vertex;
   std::unordered_map<int, int> start_edge_id_by_point;
   std::unordered_map<int, int> goal_edge_id_by_point;
   std::unordered_map<int, int> seg_to_edge_id;

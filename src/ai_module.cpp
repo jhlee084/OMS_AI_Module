@@ -2,6 +2,7 @@
 #include "dijkstra.h"
 #include <algorithm>
 #include <climits>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -274,12 +275,23 @@ AI_API int __cdecl AI_getExpectedPath(int start_pt, int dst_pt, double min_etime
 }
 
 AI_API int __cdecl AI_GetTime(int start_pt_id, int end_pt_id, double* p_time, bool use_init, double start_offset, double end_offset) {
-  (void)use_init; (void)start_offset; (void)end_offset;
+  (void)use_init;
   if (!p_time) return 0;
+  *p_time = 0.0;
+  // start_offset and end_offset are elapsed-time values, not positions.
+  // The point-to-point route contains the whole first segment, so remove the
+  // already travelled time. Add the time from the destination point to its
+  // offset location. Invalid time inputs are rejected at the native boundary.
+  if (!std::isfinite(start_offset) || !std::isfinite(end_offset) ||
+      start_offset < 0.0 || end_offset < 0.0) {
+    return 0;
+  }
   std::vector<int> path;
   double t = 0.0;
-  if (!dijkstra_shortest_path(start_pt_id, end_pt_id, path, t)) { *p_time = 0.0; return 0; }
-  *p_time = t;
+  if (!dijkstra_shortest_path(start_pt_id, end_pt_id, path, t)) return 0;
+
+  const double remaining_time = std::max(0.0, t - start_offset);
+  *p_time = remaining_time + end_offset;
   return 1;
 }
 
