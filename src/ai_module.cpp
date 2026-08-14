@@ -287,11 +287,14 @@ AI_API int __cdecl AI_GetTime(int start_pt_id, int end_pt_id, double* p_time, bo
     return 0;
   }
   std::vector<int> path;
-  double t = 0.0;
-  if (!dijkstra_shortest_path(start_pt_id, end_pt_id, path, t)) return 0;
+  double route_time_seconds = 0.0;
+  if (!dijkstra_shortest_path(
+        start_pt_id, end_pt_id, path, route_time_seconds)) return 0;
 
-  const double remaining_time = std::max(0.0, t - start_offset);
-  *p_time = remaining_time + end_offset;
+  // Graph weights, offsets, and AI_GetTime output are all seconds.
+  const double remaining_time_seconds =
+    std::max(0.0, route_time_seconds - start_offset);
+  *p_time = remaining_time_seconds + end_offset;
   return 1;
 }
 

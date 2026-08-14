@@ -22,7 +22,12 @@
 namespace {
 
 constexpr const char* kLearnedFormat = "OMS_AI_EDGE_BUCKET_LEARNING";
+// Persisted version 1 keeps learned time sums as integer milliseconds for
+// compatibility. Runtime graph weights remain seconds.
 constexpr int kLearnedVersion = 1;
+// Version 2 was briefly used for persisted seconds. Continue accepting it so
+// files produced by that build can be recovered and rewritten as version 1.
+constexpr int kLearnedVersionSeconds = 2;
 
 struct SnapshotEdgeLearning {
   int edge_id = 0;
@@ -257,7 +262,7 @@ static bool serialize_learned_snapshot(
       if (!first_bucket) json << ',';
       first_bucket = false;
       json << "{\"bucket\":" << bucket
-           << ",\"sum\":" << std::llround(agg.sum)
+           << ",\"sum\":" << std::llround(agg.sum * 1000.0)
            << ",\"count\":" << agg.count << '}';
     }
     json << "]}";
@@ -301,7 +306,8 @@ bool dijkstra_restore_learned_data(
   if (itFormat == obj.end() || !itFormat->second.is_string() ||
       itFormat->second.get_string() != kLearnedFormat ||
       itVersion == obj.end() || !parse_int(itVersion->second, version) ||
-      version != kLearnedVersion || itEdges == obj.end() ||
+      (version != kLearnedVersion &&
+       version != kLearnedVersionSeconds) || itEdges == obj.end() ||
       !itEdges->second.is_array()) {
     LogFile("[Error] [Dijkstra] learned data header is invalid.");
     return false;
@@ -315,7 +321,17 @@ bool dijkstra_restore_learned_data(
       LogFile("[Error] [Dijkstra] learned data edge record is invalid.");
       return false;
     }
+    if (version == kLearnedVersion) {
+      for (int bucket = 0; bucket <= LEARN_VEHICLE_BUCKET_MAX; ++bucket) {
+        if (saved.has_bucket[bucket]) saved.buckets[bucket].sum /= 1000.0;
+      }
+    }
     saved_edges.push_back(std::move(saved));
+  }
+
+  if (version == kLearnedVersion) {
+    LogFile(
+      "[Dijkstra] converted persisted learned units. milliseconds->seconds");
   }
 
   flush_edge_learning_worker();

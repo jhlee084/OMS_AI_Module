@@ -69,7 +69,10 @@ bool build_graph_from_track_json(const std::string& json_text, DijkstraStats* st
     if (travel_time <= 0.0) {
       const double eff_speed = speed * (speed_ratio / 100.0);
       if (length > 0.0 && eff_speed > 0.0) {
-        travel_time = (length * 1000.0) / eff_speed;
+        // Topology length is millimetres and speed is millimetres/second.
+        // Keep every graph weight in seconds, matching the supplied
+        // travel_time field and the OMS AI_GetTime contract.
+        travel_time = length / eff_speed;
       } else {
         travel_time = 1.0;
       }
@@ -78,7 +81,8 @@ bool build_graph_from_track_json(const std::string& json_text, DijkstraStats* st
     Seg seg;
     seg.from = sp;
     seg.to = ep;
-    seg.offset_length = length > 0.0 ? length * 1000.0 : 0.0;
+    // Vehicle/order offsets and topology length are both millimetres.
+    seg.offset_length = length > 0.0 ? length : 0.0;
     seg.base_w = travel_time;
     seg.seg_id = seg_id;
 

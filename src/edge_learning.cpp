@@ -311,8 +311,10 @@ static bool build_edge_learn_batch_from_payloads(
         if (dt > 0 && p.last_point != prev.last_point) {
           if (prev.last_point != prev.next_point &&
               p.last_point == prev.next_point) {
+            // Vehicle timestamps are epoch milliseconds; graph weights are
+            // seconds. Convert samples before mixing them with base weights.
             add_completed_segment_to_edge_batch(
-              prev, p, (double)dt, out_edge_batch);
+              prev, p, (double)dt / 1000.0, out_edge_batch);
           } else {
             g_edge_progress_by_vehicle.erase(p.physical_id);
             LogFile(

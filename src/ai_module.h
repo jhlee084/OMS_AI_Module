@@ -24,14 +24,21 @@ struct AI_DECISION_INFO {
 
 struct AI_VEHICLE_INPUT {
   int32_t vehicle_id;
-  int32_t segment_id;
-  int32_t offset;
+  int32_t current_segment_id;
+  int32_t current_offset;
+  // Point at which assignment routing starts after committed movement.
+  // A positive value allows all outgoing edges from the point. Zero means
+  // assignment routing starts at the current segment/offset position.
+  int32_t start_point_id;
 };
 
 struct AI_ORDER_INPUT {
   int32_t order_id;
   int32_t destination_segment_id;
   int32_t destination_offset;
+  // Vehicle assigned to this order in the previous dispatch cycle.
+  // Zero means that there is no previous assignment.
+  int32_t previous_vehicle_id;
 };
 
 enum AI_ASSIGNMENT_STATUS : int32_t {
@@ -49,8 +56,8 @@ struct AI_ASSIGNMENT_RESULT {
   int32_t reserved;
 };
 
-static_assert(sizeof(AI_VEHICLE_INPUT) == 12, "Unexpected AI_VEHICLE_INPUT layout");
-static_assert(sizeof(AI_ORDER_INPUT) == 12, "Unexpected AI_ORDER_INPUT layout");
+static_assert(sizeof(AI_VEHICLE_INPUT) == 16, "Unexpected AI_VEHICLE_INPUT layout");
+static_assert(sizeof(AI_ORDER_INPUT) == 16, "Unexpected AI_ORDER_INPUT layout");
 static_assert(sizeof(AI_ASSIGNMENT_RESULT) == 24, "Unexpected AI_ASSIGNMENT_RESULT layout");
 
 AI_API int __cdecl AI_OptimizeAssignments(
@@ -59,6 +66,7 @@ AI_API int __cdecl AI_OptimizeAssignments(
   const AI_VEHICLE_INPUT* vehicles,
   int32_t vehicle_count,
   const uint8_t* allowed_matrix,
+  float order_change_threshold_seconds,
   AI_ASSIGNMENT_RESULT* out_results,
   int32_t* out_result_count);
 

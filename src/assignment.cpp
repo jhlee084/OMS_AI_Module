@@ -109,6 +109,65 @@ VehicleRouteInfo make_vehicle_info(
   return info;
 }
 
+VehicleRouteInfo make_vehicle_point_info(
+  const GraphState& state, int point_id) {
+  VehicleRouteInfo info;
+
+  // A branch point is a real compressed-graph vertex. Start directly at the
+  // vertex so Dijkstra can consider every outgoing edge.
+  const auto itOutgoing = state.out_seg_ids_by_point.find(point_id);
+  const auto itVertex = state.point_index_by_id.find(point_id);
+  if (itOutgoing != state.out_seg_ids_by_point.end() &&
+      itOutgoing->second.size() > 1 &&
+      itVertex != state.point_index_by_id.end()) {
+    info.mapped = true;
+    info.tail_enabled = true;
+    info.source_vertex = itVertex->second;
+    info.tail_time = 0.0;
+    return info;
+  }
+
+  const auto itEdgeId = state.start_edge_id_by_point.find(point_id);
+  if (itEdgeId == state.start_edge_id_by_point.end()) return info;
+
+  const auto itEdge = state.edge_by_id.find(itEdgeId->second);
+  if (itEdge == state.edge_by_id.end()) return info;
+  const EdgeChain& edge = itEdge->second;
+  if (edge.seg_ids.empty() || edge.prefix_w.size() != edge.seg_ids.size() + 1 ||
+      edge.end_vertex < 0) {
+    return info;
+  }
+
+  size_t point_index = edge.point_ids.size();
+  for (size_t i = 0; i < edge.point_ids.size(); ++i) {
+    if (edge.point_ids[i] == point_id) {
+      point_index = i;
+      break;
+    }
+  }
+  if (point_index >= edge.point_ids.size() ||
+      point_index >= edge.prefix_w.size()) {
+    return info;
+  }
+
+  info.mapped = true;
+  info.edge_id = edge.edge_id;
+  info.source_vertex = edge.end_vertex;
+  info.position_time = edge.prefix_w[point_index];
+  info.tail_time = edge.prefix_w.back() - info.position_time;
+  if (point_index == edge.seg_ids.size()) {
+    info.segment_index = static_cast<int>(edge.seg_ids.size()) - 1;
+    info.segment_fraction = 1.0;
+  } else {
+    info.segment_index = static_cast<int>(point_index);
+    info.segment_fraction = 0.0;
+  }
+  info.tail_enabled = segment_range_enabled(
+    state, edge, static_cast<int>(point_index),
+    static_cast<int>(edge.seg_ids.size()));
+  return info;
+}
+
 OrderRouteInfo make_order_info(
   const GraphState& state, int segment_id, int32_t destination_offset) {
   OrderRouteInfo info;
@@ -143,6 +202,49 @@ OrderRouteInfo make_order_info(
   info.head_time = info.position_time;
   const int head_end = segment_index + (fraction > 0.0 ? 1 : 0);
   info.head_enabled = segment_range_enabled(state, edge, 0, head_end);
+  return info;
+}
+
+OrderRouteInfo make_order_point_info(
+  const GraphState& state, int point_id) {
+  OrderRouteInfo info;
+  const auto itEdgeId = state.goal_edge_id_by_point.find(point_id);
+  if (itEdgeId == state.goal_edge_id_by_point.end()) return info;
+
+  const auto itEdge = state.edge_by_id.find(itEdgeId->second);
+  if (itEdge == state.edge_by_id.end()) return info;
+  const EdgeChain& edge = itEdge->second;
+  if (edge.seg_ids.empty() || edge.prefix_w.size() != edge.seg_ids.size() + 1 ||
+      edge.start_vertex < 0) {
+    return info;
+  }
+
+  size_t point_index = edge.point_ids.size();
+  for (size_t i = 0; i < edge.point_ids.size(); ++i) {
+    if (edge.point_ids[i] == point_id) {
+      point_index = i;
+      break;
+    }
+  }
+  if (point_index >= edge.point_ids.size() ||
+      point_index >= edge.prefix_w.size()) {
+    return info;
+  }
+
+  info.mapped = true;
+  info.edge_id = edge.edge_id;
+  info.target_vertex = edge.start_vertex;
+  info.position_time = edge.prefix_w[point_index];
+  info.head_time = info.position_time;
+  if (point_index == edge.seg_ids.size()) {
+    info.segment_index = static_cast<int>(edge.seg_ids.size()) - 1;
+    info.segment_fraction = 1.0;
+  } else {
+    info.segment_index = static_cast<int>(point_index);
+    info.segment_fraction = 0.0;
+  }
+  info.head_enabled = segment_range_enabled(
+    state, edge, 0, static_cast<int>(point_index));
   return info;
 }
 
@@ -294,6 +396,7 @@ AI_API int __cdecl AI_OptimizeAssignments(
   const AI_VEHICLE_INPUT* vehicles,
   int32_t vehicle_count,
   const uint8_t* allowed_matrix,
+  float order_change_threshold_seconds,
   AI_ASSIGNMENT_RESULT* out_results,
   int32_t* out_result_count) {
   if (!out_result_count) return 0;
@@ -301,6 +404,10 @@ AI_API int __cdecl AI_OptimizeAssignments(
   if (order_count < 0 || vehicle_count < 0) return 0;
   if (order_count == 0) return 1;
   if (!orders || !out_results) return 0;
+  if (!std::isfinite(order_change_threshold_seconds) ||
+      order_change_threshold_seconds < 0.0) return 0;
+  const double threshold_seconds =
+    static_cast<double>(order_change_threshold_seconds);
 
   for (int order_index = 0; order_index < order_count; ++order_index) {
     AI_ASSIGNMENT_RESULT& result = out_results[order_index];
@@ -350,11 +457,33 @@ AI_API int __cdecl AI_OptimizeAssignments(
       std::lock_guard<std::mutex> lock(g_mtx);
       if (!g_state.has_topology) return 0;
 
+      std::vector<VehicleRouteInfo> current_vehicle_info(vehicle_size);
       std::vector<VehicleRouteInfo> vehicle_info(vehicle_size);
+      std::vector<double> committed_times(vehicle_size, kInfinity);
       std::vector<OrderRouteInfo> order_info(order_size);
       for (int i = 0; i < vehicle_count; ++i) {
-        vehicle_info[static_cast<size_t>(i)] =
-          make_vehicle_info(g_state, vehicles[i].segment_id, vehicles[i].offset);
+        const size_t index = static_cast<size_t>(i);
+        current_vehicle_info[index] = make_vehicle_info(
+          g_state,
+          vehicles[i].current_segment_id,
+          vehicles[i].current_offset);
+        if (vehicles[i].start_point_id > 0) {
+          vehicle_info[index] = make_vehicle_point_info(
+            g_state, vehicles[i].start_point_id);
+        } else {
+          vehicle_info[index] = current_vehicle_info[index];
+        }
+        if (vehicles[i].start_point_id <= 0) {
+          committed_times[index] = 0.0;
+        } else {
+          const auto itCurrentSegment =
+            g_state.seg_by_id.find(vehicles[i].current_segment_id);
+          if (vehicles[i].current_offset == 0 &&
+              itCurrentSegment != g_state.seg_by_id.end() &&
+              itCurrentSegment->second.from == vehicles[i].start_point_id) {
+            committed_times[index] = 0.0;
+          }
+        }
       }
       for (int i = 0; i < order_count; ++i) {
         order_info[static_cast<size_t>(i)] =
@@ -364,19 +493,103 @@ AI_API int __cdecl AI_OptimizeAssignments(
             orders[i].destination_offset);
       }
 
+      // Calculate each vehicle's mandatory travel from its current position
+      // to start_point_id. Direct paths inside one
+      // compressed edge are resolved first; the rest are grouped so Dijkstra
+      // runs once per unique source or target vertex, whichever is fewer.
+      std::vector<OrderRouteInfo> committed_target_info(vehicle_size);
+      std::vector<int> unresolved_committed;
+      unresolved_committed.reserve(vehicle_size);
+      for (int i = 0; i < vehicle_count; ++i) {
+        const size_t index = static_cast<size_t>(i);
+        if (std::isfinite(committed_times[index])) continue;
+        const VehicleRouteInfo& current = current_vehicle_info[index];
+        committed_target_info[index] = make_order_point_info(
+          g_state, vehicles[i].start_point_id);
+        const OrderRouteInfo& target = committed_target_info[index];
+        double direct_time = 0.0;
+        if (direct_same_edge_time(g_state, current, target, direct_time)) {
+          committed_times[index] = direct_time;
+        } else if (current.mapped && current.tail_enabled &&
+                   target.mapped && target.head_enabled) {
+          unresolved_committed.push_back(i);
+        }
+      }
+
+      if (!unresolved_committed.empty()) {
+        std::unordered_map<int, std::vector<int>> committed_by_source;
+        std::unordered_map<int, std::vector<int>> committed_by_target;
+        for (int vehicle_index : unresolved_committed) {
+          const size_t index = static_cast<size_t>(vehicle_index);
+          committed_by_source[current_vehicle_info[index].source_vertex]
+            .push_back(vehicle_index);
+          committed_by_target[committed_target_info[index].target_vertex]
+            .push_back(vehicle_index);
+        }
+
+        std::vector<int> committed_sources;
+        std::vector<int> committed_targets;
+        committed_sources.reserve(committed_by_source.size());
+        committed_targets.reserve(committed_by_target.size());
+        for (const auto& item : committed_by_source)
+          committed_sources.push_back(item.first);
+        for (const auto& item : committed_by_target)
+          committed_targets.push_back(item.first);
+
+        DistanceScratch committed_scratch;
+        if (committed_sources.size() <= committed_targets.size()) {
+          for (const auto& source_group : committed_by_source) {
+            calculate_distances(
+              g_state, source_group.first, false, committed_targets,
+              committed_scratch);
+            for (int vehicle_index : source_group.second) {
+              const size_t index = static_cast<size_t>(vehicle_index);
+              const VehicleRouteInfo& current = current_vehicle_info[index];
+              const OrderRouteInfo& target = committed_target_info[index];
+              const double middle =
+                committed_scratch.dist[static_cast<size_t>(target.target_vertex)];
+              if (std::isfinite(middle)) {
+                committed_times[index] =
+                  current.tail_time + middle + target.head_time;
+              }
+            }
+          }
+        } else {
+          for (const auto& target_group : committed_by_target) {
+            calculate_distances(
+              g_state, target_group.first, true, committed_sources,
+              committed_scratch);
+            for (int vehicle_index : target_group.second) {
+              const size_t index = static_cast<size_t>(vehicle_index);
+              const VehicleRouteInfo& current = current_vehicle_info[index];
+              const OrderRouteInfo& target = committed_target_info[index];
+              const double middle =
+                committed_scratch.dist[static_cast<size_t>(current.source_vertex)];
+              if (std::isfinite(middle)) {
+                committed_times[index] =
+                  current.tail_time + middle + target.head_time;
+              }
+            }
+          }
+        }
+      }
+
       // Resolve direct travel within the same compressed edge first.
       for (int order_index = 0; order_index < order_count; ++order_index) {
         for (int vehicle_index = 0; vehicle_index < vehicle_count; ++vehicle_index) {
           const size_t matrix_index = static_cast<size_t>(order_index) * vehicle_size
             + static_cast<size_t>(vehicle_index);
           if (!allowed_matrix[matrix_index]) continue;
+          const double committed_time =
+            committed_times[static_cast<size_t>(vehicle_index)];
+          if (!std::isfinite(committed_time)) continue;
           double direct_time = 0.0;
           if (direct_same_edge_time(
                 g_state,
                 vehicle_info[static_cast<size_t>(vehicle_index)],
                 order_info[static_cast<size_t>(order_index)],
                 direct_time)) {
-            pair_times[matrix_index] = direct_time;
+            pair_times[matrix_index] = committed_time + direct_time;
           }
         }
       }
@@ -391,6 +604,7 @@ AI_API int __cdecl AI_OptimizeAssignments(
             + static_cast<size_t>(vehicle_index);
           const VehicleRouteInfo& vehicle = vehicle_info[static_cast<size_t>(vehicle_index)];
           if (!allowed_matrix[matrix_index] || std::isfinite(pair_times[matrix_index]) ||
+              !std::isfinite(committed_times[static_cast<size_t>(vehicle_index)]) ||
               !vehicle.mapped || !vehicle.tail_enabled) {
             continue;
           }
@@ -437,7 +651,9 @@ AI_API int __cdecl AI_OptimizeAssignments(
               if (!order.mapped || !order.head_enabled || order.target_vertex < 0) continue;
               const double middle_time = scratch.dist[static_cast<size_t>(order.target_vertex)];
               if (!std::isfinite(middle_time)) continue;
-              pair_times[matrix_index] = vehicle.tail_time + middle_time + order.head_time;
+              pair_times[matrix_index] =
+                committed_times[static_cast<size_t>(vehicle_index)] +
+                vehicle.tail_time + middle_time + order.head_time;
             }
           }
         }
@@ -455,7 +671,9 @@ AI_API int __cdecl AI_OptimizeAssignments(
               if (!vehicle.mapped || !vehicle.tail_enabled || vehicle.source_vertex < 0) continue;
               const double middle_time = scratch.dist[static_cast<size_t>(vehicle.source_vertex)];
               if (!std::isfinite(middle_time)) continue;
-              pair_times[matrix_index] = vehicle.tail_time + middle_time + order.head_time;
+              pair_times[matrix_index] =
+                committed_times[static_cast<size_t>(vehicle_index)] +
+                vehicle.tail_time + middle_time + order.head_time;
             }
           }
         }
@@ -489,7 +707,15 @@ AI_API int __cdecl AI_OptimizeAssignments(
       const int vehicle_index = order_rows ? column : row;
       const double time = pair_times[
         static_cast<size_t>(order_index) * vehicle_size + static_cast<size_t>(vehicle_index)];
-      return std::isfinite(time) ? static_cast<long double>(time) : forbidden_cost;
+      if (!std::isfinite(time)) return forbidden_cost;
+      double assignment_cost = time;
+      if (threshold_seconds > 0.0 &&
+          orders[order_index].previous_vehicle_id != 0 &&
+          orders[order_index].previous_vehicle_id == vehicles[vehicle_index].vehicle_id) {
+        assignment_cost = std::max(
+          0.0, assignment_cost - threshold_seconds);
+      }
+      return static_cast<long double>(assignment_cost);
     };
 
     const std::vector<int> row_to_column =
